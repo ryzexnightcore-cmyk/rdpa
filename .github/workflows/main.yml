@@ -31,6 +31,15 @@ jobs:
 
       - name: Display Login Details
         run: |
+          echo "================================"
+          echo "         MAC RDP DETAILS"
+          echo "================================"
+          echo "Username: runneradmin"
+          echo "Password: P@ssw0rd!"
+          echo "VNC Password: runnerrdp"
+          echo "VNC Password: runnerrdp"
+          echo "================================"
+
           bash login.sh
 
       - name: Keep Session Running
