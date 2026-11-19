@@ -1,0 +1,58 @@
+
+name: MacRDP-Diagnostics
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: macOS Diagnostics
+    runs-on: macos-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check macOS
+        run: |
+          echo "=== macOS Version ==="
+          sw_vers
+
+          echo "=== Hardware ==="
+          uname -a
+
+          echo "=== User ==="
+          who
+          id
+
+      - name: Check Display
+        run: |
+          echo "=== Display Information ==="
+          system_profiler SPDisplaysDataType
+
+          echo "=== WindowServer ==="
+          ps aux | grep -E '[W]indowServer|[l]oginwindow'
+
+      - name: Check Remote Services
+        run: |
+          echo "=== Remote Services ==="
+          sudo launchctl list | grep -Ei \
+            'RemoteDesktop|screensharing' || true
+
+          echo "=== Port 5900 ==="
+          nc -z -G 2 127.0.0.1 5900 \
+            && echo "VNC port responding" \
+            || echo "VNC port unavailable"
+
+      - name: Check Session
+        run: |
+          echo "=== Active Sessions ==="
+          who
+
+          echo "=== Processes ==="
+          ps aux | head -30
+
+          echo "=== Disk ==="
+          df -h
+
+      - name: Finish
+        run: |
+          echo "Diagnostics completed."
