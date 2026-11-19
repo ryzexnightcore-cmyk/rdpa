@@ -42,7 +42,7 @@ jobs:
           echo "       MAC RDP CONNECTION"
           echo "=================================="
           echo "VNC Username: Not required"
-          echo "VNC Password: See workflow summary"
+          echo "VNC Password: $VNC_PASSWORD"
           echo "=================================="
 
       - name: Keep Session Running
