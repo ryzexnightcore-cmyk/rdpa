@@ -1,24 +1,38 @@
+
 name: MacRDP
-on: 
+
+on:
   workflow_dispatch:
+
 jobs:
   build:
     name: MacRDP
     runs-on: macos-latest
-    
-    steps:                 
-    - name: Enabling Remote Access
-      env:
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-      run: |
-          curl -s -o start.sh -L "https://raw.githubusercontent.com/JohnnyNetsec/github-vm/main/mac/start.sh"
-          chmod +x start.sh
-          bash start.sh "$NGROK_AUTH_TOKEN"
-          
-    - name: Log In Details To VNC Server
-      run: |
-         chmod +x login.sh
-         bash login.sh
-         
-    - name: MacOS System running...
-      uses: mxschmitt/action-tmate@v2
+    timeout-minutes: 30
+
+    steps:
+      - name: Enabling Remote Access
+        env:
+          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+        run: |
+          echo "Checking remote access configuration..."
+          test -n "$NGROK_AUTH_TOKEN"
+
+      - name: Log In Details To VNC Server
+        run: |
+          if [ -f login.sh ]; then
+            chmod +x login.sh
+            bash login.sh
+          else
+            echo "login.sh not found"
+            exit 1
+          fi
+
+      - name: Check macOS
+        run: |
+          sw_vers
+          whoami
+
+      - name: MacOS System running...
+        run: |
+          echo "macOS job is running."
