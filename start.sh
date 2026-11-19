@@ -80,8 +80,6 @@ cat > "$HOME/Desktop/Chrome-NoGPU.command" <<'CMD'
 open -a "Google Chrome" --args --disable-gpu --disable-software-rasterizer --no-first-run --no-default-browser-check
 CMD
 chmod +x "$HOME/Desktop/Chrome-NoGPU.command"
-# Also launch it now so it is already open when you connect
-open -a "Google Chrome" --args --disable-gpu --no-first-run --no-default-browser-check "https://www.google.com" 2>/dev/null || true
 
 #--- Install ngrok, configure and start it
 brew install --cask ngrok
