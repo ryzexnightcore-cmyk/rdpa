@@ -35,6 +35,17 @@ if ! id "$USER_NAME" >/dev/null 2>&1; then
   sudo dscl . -append /Groups/admin GroupMembership $USER_NAME
 fi
 
+#--- Skip the Setup Assistant / "Sign in to Apple Account" screens
+sudo touch /var/db/.AppleSetupDone
+for h in /Users/$USER_NAME /Users/runner "$HOME"; do
+  [ -d "$h" ] || continue
+  o=$(stat -f %Su "$h")
+  sudo -u "$o" defaults write "$h/Library/Preferences/com.apple.SetupAssistant" DidSeeCloudSetup -bool true 2>/dev/null || true
+  sudo -u "$o" defaults write "$h/Library/Preferences/com.apple.SetupAssistant" DidSeeSiriSetup -bool true 2>/dev/null || true
+  sudo -u "$o" defaults write "$h/Library/Preferences/com.apple.SetupAssistant" DidSeeAccessibility -bool true 2>/dev/null || true
+  sudo -u "$o" defaults write "$h/Library/Preferences/com.apple.SetupAssistant" LastSeenCloudProductVersion "$(sw_vers -productVersion)" 2>/dev/null || true
+done
+
 #--- Grant Screen Recording / Accessibility to the screen sharing agents.
 # Without this the VNC session connects but only shows a black screen on newer macOS.
 # Best effort: only works if the TCC database is writable on the image.
