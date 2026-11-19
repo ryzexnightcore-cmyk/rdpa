@@ -71,6 +71,18 @@ sudo $KICKSTART -restart -agent -console
 #--- Wake the display once more now that everything is up
 caffeinate -u -t 5 >/dev/null 2>&1 || true
 
+#--- Browser that works on a GPU-less VM (Safari renders blank pages here)
+brew install --cask google-chrome || true
+# Launcher: open "Chrome-NoGPU" from Spotlight / use: open -a "Google Chrome" --args --disable-gpu
+mkdir -p "$HOME/Desktop"
+cat > "$HOME/Desktop/Chrome-NoGPU.command" <<'CMD'
+#!/bin/bash
+open -a "Google Chrome" --args --disable-gpu --disable-software-rasterizer --no-first-run --no-default-browser-check
+CMD
+chmod +x "$HOME/Desktop/Chrome-NoGPU.command"
+# Also launch it now so it is already open when you connect
+open -a "Google Chrome" --args --disable-gpu --no-first-run --no-default-browser-check "https://www.google.com" 2>/dev/null || true
+
 #--- Install ngrok, configure and start it
 brew install --cask ngrok
 ngrok config add-authtoken "$NGROK_TOKEN" 2>/dev/null || ngrok authtoken "$NGROK_TOKEN"
