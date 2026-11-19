@@ -1,88 +1,115 @@
+
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# macOS GitHub-hosted runners already have a logged-in runner account.
-# Do not create a second account or overwrite system account IDs.
-
+# Check required secret
 if [[ -z "${NGROK_AUTH_TOKEN:-}" ]]; then
-  echo "::error::NGROK_AUTH_TOKEN is empty. Add it as a GitHub Actions repository secret."
+  echo "::error::NGROK_AUTH_TOKEN is missing"
   exit 1
 fi
 
+# Check Homebrew
 if ! command -v brew >/dev/null 2>&1; then
-  echo "::error::Homebrew is not available on this runner."
+  echo "::error::Homebrew is unavailable"
   exit 1
 fi
 
+# Install ngrok
 if ! command -v ngrok >/dev/null 2>&1; then
-  brew install --cask ngrok
+  brew install ngrok
 fi
 
-# Generate an unpredictable 8-character VNC password.
-# Traditional VNC password authentication only uses the first 8 characters.
+# Generate VNC password
 VNC_PASSWORD="$(openssl rand -hex 4)"
-echo "::add-mask::$VNC_PASSWORD"
 
-# Configure Apple Remote Management / VNC.
+# Share password with subsequent GitHub Actions steps
+echo "VNC_PASSWORD=$VNC_PASSWORD" >> "$GITHUB_ENV"
+
+# Configure Apple Remote Desktop
 ARD_KICKSTART="/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
+
 if [[ ! -x "$ARD_KICKSTART" ]]; then
-  echo "::error::Apple Remote Management kickstart utility was not found."
+  echo "::error::ARDAgent kickstart not found"
   exit 1
 fi
 
-sudo "$ARD_KICKSTART" -activate \
-  -configure -allowAccessFor -allUsers -privs -all
+sudo "$ARD_KICKSTART" \
+  -activate \
+  -configure \
+  -allowAccessFor -allUsers \
+  -privs -all
 
-sudo "$ARD_KICKSTART" -configure -clientopts \
-  -setvnclegacy -vnclegacy yes
+sudo "$ARD_KICKSTART" \
+  -configure \
+  -clientopts \
+  -setvnclegacy \
+  -vnclegacy yes
 
-# Store the legacy VNC password in Apple's expected encrypted format.
+# Configure VNC legacy password
 printf '%s\n' "$VNC_PASSWORD" |
   perl -we '
-    BEGIN { @k = unpack "C*", pack "H*", "1734516E8BA8C5E2FF1C39567390ADCA" }
+    BEGIN {
+      @k = unpack "C*", pack "H*",
+      "1734516E8BA8C5E2FF1C39567390ADCA"
+    }
     $_ = <>;
     chomp;
     s/^(.{8}).*/$1/;
     @p = unpack "C*", $_;
-    foreach (@k) { printf "%02X", $_ ^ (shift @p || 0) }
+    foreach (@k) {
+      printf "%02X", $_ ^ (shift @p || 0)
+    }
     print "\n";
   ' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt >/dev/null
 
+# Restart Remote Management
 sudo "$ARD_KICKSTART" -restart -agent
 sudo "$ARD_KICKSTART" -activate
 
-# Wait until the local VNC service is listening before opening the tunnel.
+# Check VNC port
+echo "Waiting for VNC server..."
+
+VNC_READY=false
+
 for attempt in {1..30}; do
   if nc -z 127.0.0.1 5900; then
+    VNC_READY=true
     break
   fi
   sleep 2
 done
 
-if ! nc -z 127.0.0.1 5900; then
-  echo "::error::VNC is not listening on localhost:5900. Check the runner's GUI/Remote Management availability."
+if [[ "$VNC_READY" != true ]]; then
+  echo "::error::VNC server is not listening on port 5900"
   exit 1
 fi
 
+echo "VNC server is listening."
+
+# Configure ngrok
 ngrok config add-authtoken "$NGROK_AUTH_TOKEN"
 
-# Run ngrok in the background; the workflow's keep-alive step keeps the job alive.
-nohup ngrok tcp 5900 --log=stdout > "$RUNNER_TEMP/ngrok.log" 2>&1 &
+# Start ngrok
+nohup ngrok tcp 5900 --log=stdout \
+  > "$RUNNER_TEMP/ngrok.log" 2>&1 &
+
 echo $! > "$RUNNER_TEMP/ngrok.pid"
 
-# Wait for ngrok's local API to report the public TCP endpoint.
-for attempt in {1..30}; do
-  if curl -fsS http://127.0.0.1:4040/api/tunnels >/dev/null 2>&1; then
-    break
-  fi
-  sleep 2
-done
+# Wait for ngrok API
+TUNNEL_URL=""
 
-TUNNEL_URL="$(python3 - <<'PY'
-import json, urllib.request
+for attempt in {1..30}; do
+  TUNNEL_URL="$(python3 - <<'PY'
+import json
+import urllib.request
+
 try:
-    with urllib.request.urlopen("http://127.0.0.1:4040/api/tunnels", timeout=3) as r:
-        data = json.load(r)
+    with urllib.request.urlopen(
+        "http://127.0.0.1:4040/api/tunnels",
+        timeout=3
+    ) as response:
+        data = json.load(response)
+
     for tunnel in data.get("tunnels", []):
         url = tunnel.get("public_url", "")
         if url.startswith("tcp://"):
@@ -93,22 +120,37 @@ except Exception:
 PY
 )"
 
+  if [[ -n "$TUNNEL_URL" ]]; then
+    break
+  fi
+
+  sleep 2
+done
+
 if [[ -z "$TUNNEL_URL" ]]; then
-  echo "::error::ngrok did not create a TCP tunnel. See the ngrok log in the job output."
+  echo "::error::ngrok tunnel failed"
   tail -n 80 "$RUNNER_TEMP/ngrok.log" || true
   exit 1
 fi
 
+# Export tunnel address for next steps
+echo "TUNNEL_URL=$TUNNEL_URL" >> "$GITHUB_ENV"
+
+# Add connection details to workflow summary
 {
-  echo "## macOS VNC connection"
+  echo "## MacRDP Connection"
   echo
-  echo "- **VNC address:** \`$TUNNEL_URL\`"
-  echo "- **VNC username:** Not required by legacy VNC authentication"
-  echo "- **VNC password:** \`$VNC_PASSWORD\`"
+  echo "**VNC Address:** $TUNNEL_URL"
   echo
-  echo "> Security: this is a temporary public TCP endpoint. Keep the repository private, do not share the workflow logs, and stop the workflow when finished."
+  echo "**VNC Username:** Not required"
+  echo
+  echo "**VNC Password:** $VNC_PASSWORD"
 } >> "$GITHUB_STEP_SUMMARY"
 
-echo "VNC tunnel: $TUNNEL_URL"
-echo "VNC password: $VNC_PASSWORD"
-echo "The VNC password is masked in subsequent GitHub Actions log output."
+echo "=================================="
+echo "       MAC RDP CONNECTION"
+echo "=================================="
+echo "VNC Address: $TUNNEL_URL"
+echo "VNC Username: Not required"
+echo "VNC Password: $VNC_PASSWORD"
+echo "=================================="
