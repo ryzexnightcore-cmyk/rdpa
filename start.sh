@@ -1,156 +1,66 @@
+#!/bin/bash
+# Usage: bash mac/start.sh <NGROK_AUTH_TOKEN>
+# Sets up VNC (Screen Sharing) on a GitHub macOS runner and tunnels it through ngrok.
 
-#!/usr/bin/env bash
-set -Eeuo pipefail
+NGROK_TOKEN="$1"
+USER_NAME="runneradmin"
+USER_PASS='P@ssw0rd!'
+# Legacy VNC passwords are limited to 8 characters.
+VNC_PASS='P@ssw0rd'
+KICKSTART=/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart
 
-# Check required secret
-if [[ -z "${NGROK_AUTH_TOKEN:-}" ]]; then
-  echo "::error::NGROK_AUTH_TOKEN is missing"
-  exit 1
+#--- Keep the display awake (a sleeping display is the #1 cause of a black VNC screen)
+sudo pmset -a displaysleep 0 sleep 0 disksleep 0 powernap 0 2>/dev/null || true
+sudo pmset -a disablesleep 1 2>/dev/null || true
+nohup caffeinate -dimsu >/dev/null 2>&1 &
+# Disable screensaver / login-window idle so the session never blanks
+sudo defaults write /Library/Preferences/com.apple.screensaver loginWindowIdleTime 0 2>/dev/null || true
+defaults -currentHost write com.apple.screensaver idleTime 0 2>/dev/null || true
+defaults write com.apple.screensaver askForPassword -int 0 2>/dev/null || true
+
+#--- Disable spotlight indexing
+sudo mdutil -i off -a >/dev/null 2>&1 || true
+
+#--- Create new admin account
+# (NFSHomeDirectory previously pointed at /Users/tcv, which is wrong.)
+if ! id "$USER_NAME" >/dev/null 2>&1; then
+  sudo dscl . -create /Users/$USER_NAME
+  sudo dscl . -create /Users/$USER_NAME UserShell /bin/bash
+  sudo dscl . -create /Users/$USER_NAME RealName Runner_Admin
+  sudo dscl . -create /Users/$USER_NAME UniqueID 1001
+  sudo dscl . -create /Users/$USER_NAME PrimaryGroupID 80
+  sudo dscl . -create /Users/$USER_NAME NFSHomeDirectory /Users/$USER_NAME
+  sudo dscl . -passwd /Users/$USER_NAME "$USER_PASS"
+  sudo createhomedir -c -u $USER_NAME >/dev/null 2>&1 || true
+  sudo dscl . -append /Groups/admin GroupMembership $USER_NAME
 fi
 
-# Check Homebrew
-if ! command -v brew >/dev/null 2>&1; then
-  echo "::error::Homebrew is unavailable"
-  exit 1
-fi
-
-# Install ngrok
-if ! command -v ngrok >/dev/null 2>&1; then
-  brew install ngrok
-fi
-
-# Generate VNC password
-VNC_PASSWORD="$(openssl rand -hex 4)"
-
-# Share password with subsequent GitHub Actions steps
-echo "VNC_PASSWORD=$VNC_PASSWORD" >> "$GITHUB_ENV"
-
-# Configure Apple Remote Desktop
-ARD_KICKSTART="/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
-
-if [[ ! -x "$ARD_KICKSTART" ]]; then
-  echo "::error::ARDAgent kickstart not found"
-  exit 1
-fi
-
-sudo "$ARD_KICKSTART" \
-  -activate \
-  -configure \
-  -allowAccessFor -allUsers \
-  -privs -all
-
-sudo "$ARD_KICKSTART" \
-  -configure \
-  -clientopts \
-  -setvnclegacy \
-  -vnclegacy yes
-
-# Configure VNC legacy password
-printf '%s\n' "$VNC_PASSWORD" |
-  perl -we '
-    BEGIN {
-      @k = unpack "C*", pack "H*",
-      "1734516E8BA8C5E2FF1C39567390ADCA"
-    }
-    $_ = <>;
-    chomp;
-    s/^(.{8}).*/$1/;
-    @p = unpack "C*", $_;
-    foreach (@k) {
-      printf "%02X", $_ ^ (shift @p || 0)
-    }
-    print "\n";
-  ' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt >/dev/null
-
-# Restart Remote Management
-sudo "$ARD_KICKSTART" -restart -agent
-sudo "$ARD_KICKSTART" -activate
-
-# Check VNC port
-echo "Waiting for VNC server..."
-
-VNC_READY=false
-
-for attempt in {1..30}; do
-  if nc -z 127.0.0.1 5900; then
-    VNC_READY=true
-    break
-  fi
-  sleep 2
+#--- Grant Screen Recording / Accessibility to the screen sharing agents.
+# Without this the VNC session connects but only shows a black screen on newer macOS.
+# Best effort: only works if the TCC database is writable on the image.
+TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
+NOW=$(date +%s)
+for client in com.apple.screensharing.agent com.apple.screensharing.launchd com.apple.ScreenSharing com.apple.RemoteDesktop.agent; do
+  for svc in kTCCServiceScreenCapture kTCCServiceAccessibility kTCCServicePostEvent; do
+    sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags, last_modified) VALUES ('$svc','$client',0,2,4,1,0,$NOW);" 2>/dev/null || true
+  done
 done
 
-if [[ "$VNC_READY" != true ]]; then
-  echo "::error::VNC server is not listening on port 5900"
-  exit 1
-fi
+#--- Enable VNC (legacy VNC password so any VNC client can connect)
+sudo $KICKSTART -activate -configure -access -on \
+  -clientopts -setvnclegacy -vnclegacy yes \
+  -clientopts -setvncpw -vncpw "$VNC_PASS" \
+  -restart -agent -privs -all
 
-echo "VNC server is listening."
+# Restart the screen sharing daemon so it picks up the TCC changes
+sudo killall screensharingd 2>/dev/null || true
+sudo launchctl kickstart -k system/com.apple.screensharing 2>/dev/null || true
+sudo $KICKSTART -restart -agent -console
 
-# Configure ngrok
-ngrok config add-authtoken "$NGROK_AUTH_TOKEN"
+#--- Wake the display once more now that everything is up
+caffeinate -u -t 5 >/dev/null 2>&1 || true
 
-# Start ngrok
-nohup ngrok tcp 5900 --log=stdout \
-  > "$RUNNER_TEMP/ngrok.log" 2>&1 &
-
-echo $! > "$RUNNER_TEMP/ngrok.pid"
-
-# Wait for ngrok API
-TUNNEL_URL=""
-
-for attempt in {1..30}; do
-  TUNNEL_URL="$(python3 - <<'PY'
-import json
-import urllib.request
-
-try:
-    with urllib.request.urlopen(
-        "http://127.0.0.1:4040/api/tunnels",
-        timeout=3
-    ) as response:
-        data = json.load(response)
-
-    for tunnel in data.get("tunnels", []):
-        url = tunnel.get("public_url", "")
-        if url.startswith("tcp://"):
-            print(url)
-            break
-except Exception:
-    pass
-PY
-)"
-
-  if [[ -n "$TUNNEL_URL" ]]; then
-    break
-  fi
-
-  sleep 2
-done
-
-if [[ -z "$TUNNEL_URL" ]]; then
-  echo "::error::ngrok tunnel failed"
-  tail -n 80 "$RUNNER_TEMP/ngrok.log" || true
-  exit 1
-fi
-
-# Export tunnel address for next steps
-echo "TUNNEL_URL=$TUNNEL_URL" >> "$GITHUB_ENV"
-
-# Add connection details to workflow summary
-{
-  echo "## MacRDP Connection"
-  echo
-  echo "**VNC Address:** $TUNNEL_URL"
-  echo
-  echo "**VNC Username:** Not required"
-  echo
-  echo "**VNC Password:** $VNC_PASSWORD"
-} >> "$GITHUB_STEP_SUMMARY"
-
-echo "=================================="
-echo "       MAC RDP CONNECTION"
-echo "=================================="
-echo "VNC Address: $TUNNEL_URL"
-echo "VNC Username: Not required"
-echo "VNC Password: $VNC_PASSWORD"
-echo "=================================="
+#--- Install ngrok, configure and start it
+brew install --cask ngrok
+ngrok config add-authtoken "$NGROK_TOKEN" 2>/dev/null || ngrok authtoken "$NGROK_TOKEN"
+nohup ngrok tcp 5900 --region=in --log=stdout > ngrok.log 2>&1 &
