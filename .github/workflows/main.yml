@@ -15,8 +15,9 @@ jobs:
 
     steps:
       - name: Download Scripts
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           curl -fL --retry 3 \
             "https://raw.githubusercontent.com/ryzexnightcore-cmyk/rdpa/main/start.sh" \
@@ -25,10 +26,13 @@ jobs:
           chmod +x start.sh
 
       - name: Enable Remote Access
+        shell: bash
         env:
           NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
         run: |
-          if [ -z "$NGROK_AUTH_TOKEN" ]; then
+          set -euo pipefail
+
+          if [[ -z "${NGROK_AUTH_TOKEN:-}" ]]; then
             echo "::error::NGROK_AUTH_TOKEN secret is missing"
             exit 1
           fi
@@ -37,20 +41,23 @@ jobs:
 
       - name: Display VNC Connection Information
         if: success()
+        shell: bash
+        env:
+          VNC_PASSWORD: ${{ env.VNC_PASSWORD }}
+          TUNNEL_URL: ${{ env.TUNNEL_URL }}
         run: |
           echo "=================================="
           echo "       MAC RDP CONNECTION"
           echo "=================================="
+          echo "VNC Address: $TUNNEL_URL"
           echo "VNC Username: Not required"
           echo "VNC Password: $VNC_PASSWORD"
           echo "=================================="
 
       - name: Keep Session Running
         if: success()
+        shell: bash
         run: |
           echo "MacRDP session is running."
-          echo "Check the workflow Summary for:"
-          echo "- Ngrok TCP address"
-          echo "- Generated VNC password"
-
+          echo "Keep this workflow active while connected."
           sleep 20500
