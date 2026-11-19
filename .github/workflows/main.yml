@@ -4,6 +4,9 @@ name: MacRDP
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: MacRDP
@@ -13,36 +16,41 @@ jobs:
     steps:
       - name: Download Scripts
         run: |
-          curl -fL \
+          set -e
+
+          curl -fL --retry 3 \
             "https://raw.githubusercontent.com/ryzexnightcore-cmyk/rdpa/main/start.sh" \
             -o start.sh
 
-          curl -fL \
-            "https://raw.githubusercontent.com/ryzexnightcore-cmyk/rdpa/main/login.sh" \
-            -o login.sh
-
-          chmod +x start.sh login.sh
+          chmod +x start.sh
 
       - name: Enable Remote Access
         env:
           NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
         run: |
-          bash start.sh "$NGROK_AUTH_TOKEN"
+          if [ -z "$NGROK_AUTH_TOKEN" ]; then
+            echo "::error::NGROK_AUTH_TOKEN secret is missing"
+            exit 1
+          fi
 
-      - name: Display Login Details
+          bash start.sh
+
+      - name: Display VNC Connection Information
+        if: success()
         run: |
-          echo "================================"
-          echo "         MAC RDP DETAILS"
-          echo "================================"
-          echo "Username: runneradmin"
-          echo "Password: P@ssw0rd!"
-          echo "VNC Password: runnerrdp"
-          echo "VNC Password: runnerrdp"
-          echo "================================"
-
-          bash login.sh
+          echo "=================================="
+          echo "       MAC RDP CONNECTION"
+          echo "=================================="
+          echo "VNC Username: Not required"
+          echo "VNC Password: See workflow summary"
+          echo "=================================="
 
       - name: Keep Session Running
+        if: success()
         run: |
-          echo "MacRDP session started."
+          echo "MacRDP session is running."
+          echo "Check the workflow Summary for:"
+          echo "- Ngrok TCP address"
+          echo "- Generated VNC password"
+
           sleep 20500
