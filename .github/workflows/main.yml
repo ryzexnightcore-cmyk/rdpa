@@ -1,63 +1,26 @@
-
 name: MacRDP
-
 on:
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 jobs:
   build:
     name: MacRDP
     runs-on: macos-latest
-    timeout-minutes: 350
+    timeout-minutes: 360
 
     steps:
-      - name: Download Scripts
-        shell: bash
-        run: |
-          set -euo pipefail
+      # Pulls start.sh and login.sh from this repo (ryzexnightcore-cmyk/rdpa)
+      - uses: actions/checkout@v4
 
-          curl -fL --retry 3 \
-            "https://raw.githubusercontent.com/ryzexnightcore-cmyk/rdpa/main/start.sh" \
-            -o start.sh
-
-          chmod +x start.sh
-
-      - name: Enable Remote Access
-        shell: bash
+      - name: Enabling Remote Access
         env:
           NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
         run: |
-          set -euo pipefail
+          bash start.sh "$NGROK_AUTH_TOKEN"
 
-          if [[ -z "${NGROK_AUTH_TOKEN:-}" ]]; then
-            echo "::error::NGROK_AUTH_TOKEN secret is missing"
-            exit 1
-          fi
-
-          bash start.sh
-
-      - name: Display VNC Connection Information
-        if: success()
-        shell: bash
-        env:
-          VNC_PASSWORD: ${{ env.VNC_PASSWORD }}
-          TUNNEL_URL: ${{ env.TUNNEL_URL }}
+      - name: Log In Details To VNC Server
         run: |
-          echo "=================================="
-          echo "       MAC RDP CONNECTION"
-          echo "=================================="
-          echo "VNC Address: $TUNNEL_URL"
-          echo "VNC Username: Not required"
-          echo "VNC Password: $VNC_PASSWORD"
-          echo "=================================="
+          bash login.sh
 
-      - name: Keep Session Running
-        if: success()
-        shell: bash
-        run: |
-          echo "MacRDP session is running."
-          echo "Keep this workflow active while connected."
-          sleep 20500
+      - name: MacOS System running...
+        uses: mxschmitt/action-tmate@v3
